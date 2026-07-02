@@ -1,0 +1,30 @@
+{
+  "name": "pass-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "db:generate": "node scripts/prisma-run.js generate",
+    "db:push": "node scripts/prisma-run.js db push",
+    "db:migrate": "node scripts/prisma-run.js migrate dev",
+    "db:seed": "node prisma/seed.js",
+    "db:setup": "node scripts/prisma-run.js generate && node scripts/prisma-run.js db push && node prisma/seed.js",
+    "db:studio": "node scripts/prisma-run.js studio",
+    "db:test": "node scripts/test-db.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.5.0",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.22.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "prisma": "^6.5.0"
+  }
+}
