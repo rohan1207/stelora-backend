@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth.routes.js";
 import brandRoutes from "./routes/brand.routes.js";
 import influencerRoutes from "./routes/influencer.routes.js";
 import orderRoutes from "./routes/order.routes.js";
+import webhookRoutes from "./routes/webhook.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import storefrontRoutes from "./routes/storefront.routes.js";
 
@@ -22,6 +23,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/brand", brandRoutes);
 app.use("/api/influencer", influencerRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/webhooks", webhookRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/storefront", storefrontRoutes);
 

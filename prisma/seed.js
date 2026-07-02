@@ -1,7 +1,12 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
+
+function webhookKey() {
+  return `stelora_${crypto.randomBytes(24).toString("hex")}`;
+}
 
 async function main() {
   const adminEmail = "admin@pass.app";
@@ -36,12 +41,18 @@ async function main() {
             niche: "Beauty & Skincare",
             description: "Premium skincare for Indian skin",
             website: "https://glowskin.example.com",
+            webhookApiKey: webhookKey(),
           },
         },
       },
       include: { brandProfile: true },
     });
     console.log("Created brand: brand@demo.com / demo12345");
+  } else if (brandUser.brandProfile && !brandUser.brandProfile.webhookApiKey) {
+    await prisma.brandProfile.update({
+      where: { id: brandUser.brandProfile.id },
+      data: { webhookApiKey: webhookKey() },
+    });
   }
 
   const influencerEmail = "creator@demo.com";
@@ -62,9 +73,11 @@ async function main() {
             username: "priya",
             niche: "Beauty & Skincare",
             bio: "Skincare tips & honest reviews",
-            instagramHandle: "@priyaskincare",
+            instagramHandle: "priyaskincare",
             followerCount: 45000,
+            engagementRate: 3.5,
             verificationStatus: "VERIFIED",
+            instagramVerified: true,
           },
         },
       },
@@ -85,7 +98,7 @@ async function main() {
             description: "Brightening serum with 20% Vitamin C",
             price: 899,
             commissionPercent: 20,
-            campaignMode: "OPEN",
+            campaignMode: "APPROVAL",
             status: "ACTIVE",
           },
           {
@@ -103,12 +116,17 @@ async function main() {
             description: "Matte finish sunscreen, no white cast",
             price: 549,
             commissionPercent: 18,
-            campaignMode: "OPEN",
+            campaignMode: "APPROVAL",
             status: "ACTIVE",
           },
         ],
       });
-      console.log("Created demo products");
+      console.log("Created demo products (APPROVAL mode)");
+    } else {
+      await prisma.product.updateMany({
+        where: { brandId: brand.id, campaignMode: "OPEN" },
+        data: { campaignMode: "APPROVAL" },
+      });
     }
   }
 

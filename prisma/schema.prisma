@@ -37,12 +37,21 @@ enum PartnershipStatus {
   APPROVED
   REJECTED
   ACTIVE
+  EXPIRED
 }
 
 enum OrderStatus {
   PENDING
   CONFIRMED
   REFUNDED
+}
+
+enum OrderSource {
+  MANUAL
+  WEBHOOK
+  SHOPIFY
+  RAZORPAY
+  WOOCOMMERCE
 }
 
 enum PayoutStatus {
@@ -55,6 +64,7 @@ enum PayoutRecordStatus {
   PENDING
   PROCESSING
   PAID
+  FAILED
 }
 
 model User {
@@ -74,33 +84,46 @@ model User {
 }
 
 model BrandProfile {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  companyName String
-  logoUrl     String?
-  website     String?
-  niche       String?
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  userId               String   @unique
+  companyName          String
+  logoUrl              String?
+  website              String?
+  niche                String?
+  description          String?
+  webhookApiKey        String?  @unique
+  shopifyStoreUrl      String?
+  shopifyWebhookSecret String?
+  razorpayKeyId        String?
+  razorpayKeySecret    String?
+  razorpayWebhookSecret String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   products Product[]
 }
 
 model InfluencerProfile {
-  id                 String   @id @default(cuid())
-  userId             String   @unique
+  id                 String     @id @default(cuid())
+  userId             String     @unique
   displayName        String
-  username           String   @unique
+  username           String     @unique
   bio                String?
   avatarUrl          String?
   instagramHandle    String?
-  followerCount      Int      @default(0)
+  followerCount      Int        @default(0)
+  engagementRate     Decimal?   @db.Decimal(5, 2)
   niche              String?
   verificationStatus UserStatus @default(PENDING)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  instagramVerified  Boolean    @default(false)
+  instagramFetchedAt DateTime?
+  payoutUpi          String?
+  payoutAccountName  String?
+  payoutBankAccount  String?
+  payoutIfsc         String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   couponCodes  CouponCode[]
@@ -109,17 +132,17 @@ model InfluencerProfile {
 }
 
 model Product {
-  id                 String        @id @default(cuid())
-  brandId            String
-  name               String
-  description        String?
-  imageUrl           String?
-  price              Decimal       @db.Decimal(10, 2)
-  commissionPercent  Decimal       @db.Decimal(5, 2)
-  campaignMode       CampaignMode  @default(OPEN)
-  status             ProductStatus @default(ACTIVE)
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  id                String        @id @default(cuid())
+  brandId           String
+  name              String
+  description       String?
+  imageUrl          String?
+  price             Decimal       @db.Decimal(10, 2)
+  commissionPercent Decimal       @db.Decimal(5, 2)
+  campaignMode      CampaignMode  @default(APPROVAL)
+  status            ProductStatus @default(ACTIVE)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   brand        BrandProfile  @relation(fields: [brandId], references: [id], onDelete: Cascade)
   couponCodes  CouponCode[]
@@ -128,35 +151,43 @@ model Product {
 }
 
 model Partnership {
-  id           String            @id @default(cuid())
-  influencerId String
-  productId    String
-  status       PartnershipStatus @default(PENDING)
-  appliedAt    DateTime          @default(now())
-  approvedAt   DateTime?
-  updatedAt    DateTime          @updatedAt
+  id                 String            @id @default(cuid())
+  influencerId       String
+  productId          String
+  status             PartnershipStatus @default(PENDING)
+  applicationMessage String?
+  creatorSnapshot    Json?
+  appliedAt          DateTime          @default(now())
+  approvedAt         DateTime?
+  contentDeadline    DateTime?
+  contentSubmittedAt DateTime?
+  updatedAt          DateTime          @updatedAt
 
   influencer InfluencerProfile @relation(fields: [influencerId], references: [id], onDelete: Cascade)
   product    Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  couponCode CouponCode?
 
   @@unique([influencerId, productId])
 }
 
 model CouponCode {
-  id           String   @id @default(cuid())
-  influencerId String
-  productId    String
-  code         String   @unique
-  isActive     Boolean  @default(true)
-  usageCount   Int      @default(0)
-  totalRevenue Decimal  @default(0) @db.Decimal(12, 2)
-  expiresAt    DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String    @id @default(cuid())
+  influencerId  String
+  productId     String
+  partnershipId String?   @unique
+  code          String    @unique
+  isActive      Boolean   @default(true)
+  usageCount    Int       @default(0)
+  totalRevenue  Decimal   @default(0) @db.Decimal(12, 2)
+  activatedAt   DateTime?
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  influencer InfluencerProfile @relation(fields: [influencerId], references: [id], onDelete: Cascade)
-  product    Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
-  orders     Order[]
+  influencer  InfluencerProfile @relation(fields: [influencerId], references: [id], onDelete: Cascade)
+  product     Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  partnership Partnership?      @relation(fields: [partnershipId], references: [id])
+  orders      Order[]
 
   @@unique([influencerId, productId])
 }
@@ -171,34 +202,39 @@ model Order {
   platformFee      Decimal     @db.Decimal(10, 2)
   status           OrderStatus @default(CONFIRMED)
   payoutStatus     PayoutStatus @default(HELD)
+  externalOrderId  String?
+  source           OrderSource @default(MANUAL)
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
   couponCode CouponCode @relation(fields: [couponCodeId], references: [id])
   product    Product    @relation(fields: [productId], references: [id])
+
+  @@unique([externalOrderId, productId])
 }
 
 model Payout {
-  id           String             @id @default(cuid())
-  influencerId String
-  amount       Decimal            @db.Decimal(12, 2)
-  status       PayoutRecordStatus @default(PENDING)
-  periodStart  DateTime
-  periodEnd    DateTime
-  paidAt       DateTime?
-  createdAt    DateTime           @default(now())
+  id              String             @id @default(cuid())
+  influencerId    String
+  amount          Decimal            @db.Decimal(12, 2)
+  status          PayoutRecordStatus @default(PENDING)
+  razorpayPayoutId String?
+  periodStart     DateTime
+  periodEnd       DateTime
+  paidAt          DateTime?
+  createdAt       DateTime           @default(now())
 
   influencer InfluencerProfile @relation(fields: [influencerId], references: [id], onDelete: Cascade)
 }
 
 model Message {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   senderId      String
   receiverId    String
   partnershipId String?
   body          String
   readAt        DateTime?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   sender   User @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: Cascade)

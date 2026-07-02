@@ -3,6 +3,8 @@ import { z } from "zod";
 import prisma from "../utils/prisma.js";
 import { authMiddleware, requireRole, requireVerified } from "../middleware/auth.js";
 import { generateCouponCode } from "../services/couponEngine.js";
+import { buildCreatorSnapshot } from "../services/orderEngine.js";
+import { fetchInstagramProfile, checkEligibility, syncInstagramForUser } from "../services/instagramService.js";
 
 const router = Router();
 
@@ -84,10 +86,21 @@ router.get("/partnerships", requireVerified, async (req, res, next) => {
     const influencer = req.user.influencerProfile;
     const partnerships = await prisma.partnership.findMany({
       where: { influencerId: influencer.id },
-      include: { product: { include: { brand: true } } },
+      include: {
+        product: { include: { brand: true } },
+        couponCode: true,
+      },
       orderBy: { appliedAt: "desc" },
     });
-    res.json({ partnerships });
+
+    const enriched = partnerships.map((p) => ({
+      ...p,
+      daysLeft: p.contentDeadline
+        ? Math.max(0, Math.ceil((new Date(p.contentDeadline) - Date.now()) / (1000 * 60 * 60 * 24)))
+        : null,
+    }));
+
+    res.json({ partnerships: enriched });
   } catch (err) {
     next(err);
   }
@@ -96,7 +109,22 @@ router.get("/partnerships", requireVerified, async (req, res, next) => {
 router.post("/partnerships", requireVerified, async (req, res, next) => {
   try {
     const influencer = req.user.influencerProfile;
-    const { productId } = z.object({ productId: z.string() }).parse(req.body);
+    const schema = z.object({
+      productId: z.string(),
+      message: z.string().min(10).max(1000),
+    });
+    const { productId, message } = schema.parse(req.body);
+
+    const eligibility = checkEligibility({
+      followerCount: influencer.followerCount,
+      engagementRate: influencer.engagementRate ? Number(influencer.engagementRate) : null,
+    });
+    if (!eligibility.eligible) {
+      return res.status(403).json({
+        error: "You do not meet eligibility requirements",
+        issues: eligibility.issues,
+      });
+    }
 
     const product = await prisma.product.findUnique({
       where: { id: productId, status: "ACTIVE" },
@@ -116,10 +144,35 @@ router.post("/partnerships", requireVerified, async (req, res, next) => {
         influencerId: influencer.id,
         productId,
         status: "PENDING",
+        applicationMessage: message,
+        creatorSnapshot: buildCreatorSnapshot(influencer),
       },
       include: { product: { include: { brand: true } } },
     });
     res.status(201).json({ partnership });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch("/partnerships/:id/content-submitted", requireVerified, async (req, res, next) => {
+  try {
+    const influencer = req.user.influencerProfile;
+    const partnership = await prisma.partnership.findFirst({
+      where: {
+        id: req.params.id,
+        influencerId: influencer.id,
+        status: { in: ["APPROVED", "ACTIVE"] },
+      },
+    });
+    if (!partnership) return res.status(404).json({ error: "Partnership not found" });
+
+    const updated = await prisma.partnership.update({
+      where: { id: partnership.id },
+      data: { contentSubmittedAt: new Date() },
+      include: { product: { include: { brand: true } } },
+    });
+    res.json({ partnership: updated });
   } catch (err) {
     next(err);
   }
@@ -160,16 +213,24 @@ router.post("/codes/generate", requireVerified, async (req, res, next) => {
     });
     if (!product) return res.status(404).json({ error: "Product not found" });
 
-    if (product.campaignMode === "APPROVAL") {
-      const approved = await prisma.partnership.findFirst({
+    let partnership = null;
+    if (product.campaignMode === "APPROVAL" || product.campaignMode === "INVITE_ONLY") {
+      partnership = await prisma.partnership.findFirst({
         where: {
           influencerId: influencer.id,
           productId,
           status: { in: ["APPROVED", "ACTIVE"] },
         },
       });
-      if (!approved) {
+      if (!partnership) {
         return res.status(403).json({ error: "Brand approval required before generating a code" });
+      }
+      if (partnership.contentDeadline && new Date() > new Date(partnership.contentDeadline)) {
+        await prisma.partnership.update({
+          where: { id: partnership.id },
+          data: { status: "EXPIRED" },
+        });
+        return res.status(403).json({ error: "Content deadline has passed. Contact the brand to extend." });
       }
     }
 
@@ -187,18 +248,21 @@ router.post("/codes/generate", requireVerified, async (req, res, next) => {
       attempts++;
     }
 
+    const now = new Date();
     const coupon = await prisma.couponCode.create({
       data: {
         influencerId: influencer.id,
         productId,
+        partnershipId: partnership?.id || null,
         code,
+        activatedAt: now,
       },
       include: { product: { include: { brand: true } } },
     });
 
-    if (product.campaignMode === "APPROVAL") {
-      await prisma.partnership.updateMany({
-        where: { influencerId: influencer.id, productId, status: "APPROVED" },
+    if (partnership) {
+      await prisma.partnership.update({
+        where: { id: partnership.id },
         data: { status: "ACTIVE" },
       });
     }
@@ -221,6 +285,11 @@ router.get("/earnings", requireVerified, async (req, res, next) => {
       orderBy: { createdAt: "desc" },
     });
 
+    const payouts = await prisma.payout.findMany({
+      where: { influencerId: influencer.id },
+      orderBy: { createdAt: "desc" },
+    });
+
     const total = orders.reduce(
       (s, o) => s + (Number(o.commissionAmount) - Number(o.platformFee)),
       0
@@ -232,7 +301,62 @@ router.get("/earnings", requireVerified, async (req, res, next) => {
       .filter((o) => o.payoutStatus === "RELEASED")
       .reduce((s, o) => s + (Number(o.commissionAmount) - Number(o.platformFee)), 0);
 
-    res.json({ summary: { total, pending, released }, orders });
+    res.json({ summary: { total, pending, released }, orders, payouts });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/instagram/eligibility", requireVerified, async (req, res, next) => {
+  try {
+    const influencer = req.user.influencerProfile;
+    const eligibility = checkEligibility({
+      followerCount: influencer.followerCount,
+      engagementRate: influencer.engagementRate ? Number(influencer.engagementRate) : null,
+    });
+    res.json({ eligibility, profile: influencer });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/instagram/sync", requireVerified, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      instagramHandle: z.string().min(1),
+      followerCount: z.number().int().min(0).optional(),
+      engagementRate: z.number().min(0).max(100).optional(),
+    });
+    const data = schema.parse(req.body);
+
+    await fetchInstagramProfile(data.instagramHandle);
+    const result = await syncInstagramForUser(
+      req.user.id,
+      data.instagramHandle,
+      data.followerCount,
+      data.engagementRate
+    );
+    res.json(result);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  }
+});
+
+router.patch("/payout-details", requireVerified, async (req, res, next) => {
+  try {
+    const schema = z.object({
+      payoutUpi: z.string().optional(),
+      payoutAccountName: z.string().optional(),
+      payoutBankAccount: z.string().optional(),
+      payoutIfsc: z.string().optional(),
+    });
+    const data = schema.parse(req.body);
+    const profile = await prisma.influencerProfile.update({
+      where: { userId: req.user.id },
+      data,
+    });
+    res.json({ profile });
   } catch (err) {
     next(err);
   }
@@ -245,6 +369,7 @@ router.patch("/profile", requireVerified, async (req, res, next) => {
       bio: z.string().optional(),
       instagramHandle: z.string().optional(),
       followerCount: z.number().int().min(0).optional(),
+      engagementRate: z.number().min(0).max(100).optional(),
       niche: z.string().optional(),
       avatarUrl: z.string().optional(),
     });
