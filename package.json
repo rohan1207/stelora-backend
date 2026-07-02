@@ -4,13 +4,12 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "scripts": {
     "dev": "node --watch src/index.js",
-    "build": "prisma generate",
+    "build": "npx prisma generate",
     "start": "node src/index.js",
-    "postinstall": "prisma generate",
     "db:generate": "node scripts/prisma-run.js generate",
     "db:push": "node scripts/prisma-run.js db push",
     "db:migrate": "node scripts/prisma-run.js migrate dev",
