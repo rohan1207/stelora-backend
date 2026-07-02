@@ -8,14 +8,15 @@
   },
   "scripts": {
     "dev": "node --watch src/index.js",
-    "build": "npx prisma generate",
+    "build": "node scripts/prisma-cli.js generate",
     "start": "node src/index.js",
-    "db:generate": "node scripts/prisma-run.js generate",
+    "db:generate": "node scripts/prisma-cli.js generate",
     "db:push": "node scripts/prisma-run.js db push",
     "db:migrate": "node scripts/prisma-run.js migrate dev",
     "db:seed": "node prisma/seed.js",
-    "db:setup": "node scripts/prisma-run.js generate && node scripts/prisma-run.js db push && node prisma/seed.js",
-    "db:studio": "node scripts/prisma-run.js studio"
+    "db:setup": "node scripts/prisma-cli.js generate && node scripts/prisma-run.js db push && node prisma/seed.js",
+    "db:studio": "node scripts/prisma-run.js studio",
+    "db:test": "node scripts/test-db.js"
   },
   "dependencies": {
     "@prisma/client": "^6.5.0",

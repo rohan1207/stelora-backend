@@ -1,7 +1,11 @@
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 
-// Workaround: antivirus/SSL inspection blocks Prisma engine downloads
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const args = process.argv.slice(2).join(" ");
-execSync(`npx prisma ${args}`, { stdio: "inherit", env: process.env });
+const args = process.argv.slice(2);
+const result = spawnSync(process.execPath, ["scripts/prisma-cli.js", ...args], {
+  stdio: "inherit",
+  env: process.env,
+});
+
+process.exit(result.status ?? 1);
